@@ -2,6 +2,7 @@ import { Notice, Plugin, addIcon, TFile, TFolder, Menu, TAbstractFile, Editor, M
 import * as AnkiConnect from './src/anki'
 import { PluginSettings, ParsedSettings } from './src/interfaces/settings-interface'
 import { DEFAULT_IGNORED_FILE_GLOBS, SettingsTab } from './src/settings'
+import { migrateAndBackfillSettings } from './src/settings-migration'
 import { ANKI_ICON } from './src/constants'
 import { settingToData } from './src/setting-to-data'
 import { FileManager } from './src/files-manager'
@@ -109,18 +110,26 @@ export default class MyPlugin extends Plugin {
 		if (current_data == null || Object.keys(current_data).length != 4) {
 			new Notice("Need to connect to Anki generate default settings...")
 			const default_sets = await this.getDefaultSettings()
+			const migrated_default = migrateAndBackfillSettings(default_sets) as PluginSettings
 			this.saveData(
 				{
-					settings: default_sets,
+					settings: migrated_default,
 					"Added Media": [],
 					"File Hashes": {},
 					fields_dict: {}
 				}
 			)
 			new Notice("Default settings successfully generated!")
-			return default_sets
+			return migrated_default
 		} else {
-			return current_data.settings
+			// Run migrations on every load so we never depend on the user
+			// having opened the settings tab. This is what makes the
+			// `Cannot read properties of undefined (reading 'split')` crash
+			// in legacy installs impossible.
+			const migrated = migrateAndBackfillSettings(current_data.settings) as PluginSettings
+			current_data.settings = migrated
+			await this.saveData(current_data)
+			return migrated
 		}
 	}
 
@@ -439,8 +448,22 @@ export default class MyPlugin extends Plugin {
 			await this.saveAllData()
 
 			progressModal.close()
-			new Notice(`✅ Successfully synced ${changedFilesCount} file(s) to Anki!`)
-			this.updateStatusBar("success")
+
+			const diagnostics = manager.getDiagnosticsSummary()
+			if (diagnostics) {
+				const lines: string[] = []
+				if (diagnostics.unmatched_count > 0) {
+					lines.push(`⚠️ ${diagnostics.unmatched_count} card-like line(s) appear to have been swallowed by a math/code ignore-span and were NOT synced. This usually means a stray "$" (currency, e.g. "$200k") was paired with another "$" elsewhere in the file. Check console for samples & line numbers.`)
+				}
+				if (diagnostics.add_failure_count > 0) {
+					lines.push(`❌ ${diagnostics.add_failure_count} note(s) were rejected by Anki (duplicates / empty fields / unknown model). Check console for the rejected fronts.`)
+				}
+				console.warn("[Obsidian_to_Anki_Kai] Sync diagnostics:", diagnostics)
+				new Notice(`Synced ${changedFilesCount} file(s) with warnings. ${lines.join(" ")}`, 15000)
+			} else {
+				new Notice(`✅ Successfully synced ${changedFilesCount} file(s) to Anki!`)
+			}
+			this.updateStatusBar(diagnostics ? "error" : "success")
 
 			// Reset to idle after 3 seconds
 			setTimeout(() => {

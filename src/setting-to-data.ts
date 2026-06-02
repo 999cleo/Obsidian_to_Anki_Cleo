@@ -25,6 +25,9 @@ export async function settingToData(app: App, settings: PluginSettings, fields_d
             allowDuplicate: false,
             duplicateScope: "deck"
         },
+        // Migration in main.ts:loadSettings guarantees "Default Tags" exists
+        // by the time we get here, so direct access is safe. (Pre-5.2.0 had a
+        // brittle ?? fallback because migrations only fired in the UI.)
         tags: settings.Defaults["Default Tags"].split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0)
     }
     result.EXISTING_IDS = await AnkiConnect.invoke('findNotes', { query: "" }) as number[]

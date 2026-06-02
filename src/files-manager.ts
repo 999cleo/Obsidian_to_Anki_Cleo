@@ -266,6 +266,22 @@ export class FileManager {
                 } catch (error) {
                     console.warn("Failed to add note ", file.all_notes_to_add[i], " in file", file.path, " due to error ", error)
                     file.note_ids.push(response.result)
+                    // Surface the failure in the per-file diagnostics so the
+                    // success notice/log can warn the user instead of silently
+                    // skipping the card. (Previously a failed addNote inside
+                    // a multi just left a `null` in note_ids that writeIDs
+                    // skipped, and the user got "Successfully synced!" while
+                    // the card never reached Anki.)
+                    try {
+                        const failing_note = file.all_notes_to_add[i]
+                        const firstField = failing_note
+                            ? (Object.values(failing_note.fields)[0] as string || "").slice(0, 100)
+                            : "<unknown note>"
+                        file.scan_diagnostics.add_failures.push({
+                            preview: firstField,
+                            error: String(error),
+                        })
+                    } catch (_) { /* never break sync on diagnostics */ }
                 }
             }
         }
@@ -304,6 +320,63 @@ export class FileManager {
             result[file.path] = file.getHash()
         }
         return result
+    }
+
+    /**
+     * Aggregate per-file scan diagnostics across the sync run so the UI layer
+     * can emit a single warning Notice. Returns null when nothing weird was
+     * detected, otherwise a structured summary covering:
+     *   * `unmatched_count` - card-like lines that fell inside a math/code
+     *     ignore span and were silently dropped (the regression class this
+     *     fork was built to defend against).
+     *   * `add_failure_count` - AnkiConnect addNote calls that returned an
+     *     error per-note inside a multi (previously surfaced only via
+     *     `console.warn`, now exposed to the user).
+     *   * `samples` - up to ~6 short previews per category for the Notice.
+     */
+    getDiagnosticsSummary(): null | {
+        unmatched_count: number,
+        add_failure_count: number,
+        unmatched_samples: string[],
+        add_failure_samples: string[],
+        per_file: { path: string, unmatched: number, add_failures: number }[],
+    } {
+        let unmatched = 0
+        let addFails = 0
+        const unmatched_samples: string[] = []
+        const add_failure_samples: string[] = []
+        const per_file: { path: string, unmatched: number, add_failures: number }[] = []
+        for (const file of this.ownFiles) {
+            const d = file.scan_diagnostics
+            if (!d) continue
+            if (d.suspected_unmatched.length || d.add_failures.length) {
+                per_file.push({
+                    path: file.path,
+                    unmatched: d.suspected_unmatched.length,
+                    add_failures: d.add_failures.length,
+                })
+            }
+            unmatched += d.suspected_unmatched.length
+            addFails += d.add_failures.length
+            for (const u of d.suspected_unmatched) {
+                if (unmatched_samples.length < 6) {
+                    unmatched_samples.push(`${file.path}:${u.line} ${u.preview}`)
+                }
+            }
+            for (const f of d.add_failures) {
+                if (add_failure_samples.length < 6) {
+                    add_failure_samples.push(`${f.preview} (${f.error})`)
+                }
+            }
+        }
+        if (unmatched === 0 && addFails === 0) return null
+        return {
+            unmatched_count: unmatched,
+            add_failure_count: addFails,
+            unmatched_samples,
+            add_failure_samples,
+            per_file,
+        }
     }
 
     async requests_2(): Promise<void> {

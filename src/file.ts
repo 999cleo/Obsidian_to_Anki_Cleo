@@ -93,6 +93,15 @@ abstract class AbstractFile {
     tags: string[]
     aliases: string[]
 
+    // Per-file diagnostics surfaced after sync, populated during scan/search
+    // so the UI can warn users when cards look like they were silently dropped
+    // (e.g., by an over-eager ignore-region regex) or when AnkiConnect rejects
+    // a specific note.
+    scan_diagnostics: {
+        suspected_unmatched: { line: number, preview: string, reason: string }[],
+        add_failures: { preview: string, error: string }[],
+    } = { suspected_unmatched: [], add_failures: [] }
+
     formatter: FormatConverter
 
     constructor(file_contents: string, path: string, url: string, data: FileData, file_cache: CachedMetadata) {
@@ -651,6 +660,89 @@ export class AllFile extends AbstractFile {
         this.scanDeletions()
         this.postProcessFrontmatterID()
         this.all_notes_to_add = this.notes_to_add.concat(this.inline_notes_to_add).concat(this.regex_notes_to_add)
+
+        this.detectSuspectedUnmatchedCards()
+    }
+
+    /**
+     * Heuristic post-scan check: scan the file for lines that strongly resemble
+     * card delimiters (e.g. `^Q:`, `^A:`, `^START`, `^STARTI`) and verify each
+     * one is either part of a matched note OR explained by an ignore span we
+     * trust (deck line / tag line / frozen / explicit Begin Note / Inline). If
+     * a card-like line is swallowed only by a math or code ignore span, it's
+     * almost certainly a false positive from a stray `$` or backtick. Surface
+     * the first few in `scan_diagnostics` so the user sees the warning instead
+     * of silently losing cards. This is the safety net for the regression that
+     * led to this fork.
+     */
+    detectSuspectedUnmatchedCards() {
+        // Build a set of "matched note" ranges from the cards we actually
+        // queued for add/edit. Anything overlapping these is fine.
+        const matched_ranges: [number, number][] = []
+        for (const span of this.existingIDSpans) {
+            matched_ranges.push([Math.max(0, span[0] - 400), span[1] + 400])
+        }
+        for (const idx of this.id_indexes) matched_ranges.push([Math.max(0, idx - 400), idx + 400])
+        for (const idx of this.inline_id_indexes) matched_ranges.push([Math.max(0, idx - 400), idx + 400])
+        for (const idx of this.regex_id_indexes) matched_ranges.push([Math.max(0, idx - 400), idx + 400])
+
+        const inMatched = (pos: number) => matched_ranges.some(([a, b]) => pos >= a && pos < b)
+
+        // Pull custom regex first-line cues from settings so we can detect them
+        // even when the user has remapped the patterns.
+        const cueRegexes: RegExp[] = []
+        for (const note_type in this.custom_regexps) {
+            const r = this.custom_regexps[note_type]
+            if (!r) continue
+            // grab the first ~30 chars of the user's pattern that look like a
+            // line-anchored literal cue, e.g. `^Q: ` -> /^Q: /m
+            const literalPrefix = r.match(/^\^([^.\\\[\(\?\*\+\{]{1,20})/)
+            if (literalPrefix) {
+                try { cueRegexes.push(new RegExp("^" + literalPrefix[1].replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&"), "gm")) } catch (_) {}
+            }
+        }
+        // Always also check the syntactic note markers themselves.
+        try {
+            cueRegexes.push(new RegExp("^" + this.data.NOTE_REGEXP.source.split("\\n")[0].replace(/^\^/, ""), "gm"))
+        } catch (_) {}
+
+        // Compute the set of ignore spans that came from math/code only.
+        // We rebuild them here so we can distinguish "swallowed by stray dollar"
+        // from "legitimately part of an explicit Begin Note block".
+        const math_code_spans: [number, number][] = []
+        for (const m of this.file.matchAll(c.OBS_INLINE_MATH_REGEXP)) {
+            math_code_spans.push([m.index, m.index + m[0].length])
+        }
+        for (const m of this.file.matchAll(c.OBS_DISPLAY_MATH_REGEXP)) {
+            math_code_spans.push([m.index, m.index + m[0].length])
+        }
+        for (const m of this.file.matchAll(c.OBS_CODE_REGEXP)) {
+            math_code_spans.push([m.index, m.index + m[0].length])
+        }
+        for (const m of this.file.matchAll(c.OBS_DISPLAY_CODE_REGEXP)) {
+            math_code_spans.push([m.index, m.index + m[0].length])
+        }
+        const inMathCode = (pos: number) => math_code_spans.find(([a, b]) => pos >= a && pos < b)
+
+        const seenLines = new Set<number>()
+        for (const cue of cueRegexes) {
+            for (const m of this.file.matchAll(cue)) {
+                if (seenLines.has(m.index)) continue
+                seenLines.add(m.index)
+                if (inMatched(m.index)) continue
+                const swallowingSpan = inMathCode(m.index)
+                if (!swallowingSpan) continue
+                const lineNumber = this.file.slice(0, m.index).split("\n").length
+                const lineEnd = this.file.indexOf("\n", m.index)
+                const preview = this.file.slice(m.index, lineEnd === -1 ? m.index + 120 : lineEnd).slice(0, 120)
+                this.scan_diagnostics.suspected_unmatched.push({
+                    line: lineNumber,
+                    preview,
+                    reason: `swallowed by math/code ignore-span [${swallowingSpan[0]}..${swallowingSpan[1]}], len=${swallowingSpan[1]-swallowingSpan[0]}`,
+                })
+                if (this.scan_diagnostics.suspected_unmatched.length >= 25) return
+            }
+        }
     }
 
     postProcessFrontmatterID() {

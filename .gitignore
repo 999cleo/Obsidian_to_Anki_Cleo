@@ -283,3 +283,4 @@ tests/specs_gen/*
 tests/test_outputs/*
 
 data.json
+node_modules/
