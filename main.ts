@@ -453,7 +453,7 @@ export default class MyPlugin extends Plugin {
 			if (diagnostics) {
 				const lines: string[] = []
 				if (diagnostics.unmatched_count > 0) {
-					lines.push(`⚠️ ${diagnostics.unmatched_count} card-like line(s) appear to have been swallowed by a math/code ignore-span and were NOT synced. This usually means a stray "$" (currency, e.g. "$200k") was paired with another "$" elsewhere in the file. Check console for samples & line numbers.`)
+					lines.push(`⚠️ ${diagnostics.unmatched_count} card-like line(s) were detected but NOT synced. Most often a card is malformed (e.g. the answer line is missing its "A:" prefix), or a stray "$"/backtick swallowed it into a math/code span. Check console for the exact lines & reasons.`)
 				}
 				if (diagnostics.add_failure_count > 0) {
 					lines.push(`❌ ${diagnostics.add_failure_count} note(s) were rejected by Anki (duplicates / empty fields / unknown model). Check console for the rejected fronts.`)

@@ -6,6 +6,26 @@ This fork exists to fix a class of **silent data loss** in the sync pipeline.
 
 ---
 
+## 5.3.0 - Catch malformed cards that never matched (missing `A:` and friends)
+
+5.2.0's safety net only flagged a card-cue line when it fell **inside a math/code ignore-span** (the stray-`$` currency bug). But a card can silently vanish for a second reason that the net walked straight past:
+
+> If a card's answer line is **missing its `A:` prefix**, the Q/A note regex needs both a `Q:` line and an `A:` line, so it never matches. No match means no note, no `<!--ID-->` written, and no warning. The sync notice still said success.
+
+Real reproduction: a 33-card study note synced 30 cards and silently dropped 3, all of them cards where the `A:` had been left off the answer line. They looked almost identical to the synced cards in the editor.
+
+What changed:
+
+- The scanner now records the **exact source span** of every note it actually matches (`matched_note_spans`), replacing the old `id_indexes` +/-400-character heuristic that could mask an orphaned cue sitting next to a real card.
+- `detectSuspectedUnmatchedCards` now flags **any** card-cue line that produced no note, not just ones swallowed by a math/code span. The reason string distinguishes the two causes: stray-`$`/backtick swallow vs "card start did not match the note pattern (answer line probably missing its `A:` prefix)".
+- Cues that legitimately sit inside trusted ignore spans (deck line, tag line, frozen-fields, explicit Begin/End Note blocks) are still not reported, so no false alarms.
+- The post-sync warning Notice text was broadened to name the malformed-card cause, and the per-card line numbers and reasons are dumped to the DevTools console as before.
+- New zero-dep regression test `tests/regex/orphan-card-detection.test.js` locks the behaviour: well-formed cards produce zero orphans, a card missing `A:` is flagged, and its well-formed neighbours still match.
+
+Net effect: a card that won't sync now produces a visible warning with the exact line number, instead of disappearing.
+
+---
+
 ## The bug this fork fixes
 
 The plugin builds an `ignore_spans` list of byte ranges it should NOT scan for cards: math, code, frozen-fields lines, deck/tag headers, etc.

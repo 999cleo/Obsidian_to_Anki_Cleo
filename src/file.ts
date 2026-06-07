@@ -349,6 +349,12 @@ export class AllFile extends AbstractFile {
     useFrontmatterID: boolean = false
     frontmatterID: number | null = null
     existingIDSpans: [number, number][] = []
+    // Source ranges [start, end) of every note the scanner actually matched
+    // (standard, inline, and regex). Used by detectSuspectedUnmatchedCards to
+    // tell a real card from a card-like line that produced no note. This is the
+    // precise replacement for the old id_indexes +/-400 heuristic, which could
+    // mask an orphaned cue sitting next to a legitimate card.
+    matched_note_spans: [number, number][] = []
     notesToWriteInline: { position: number, id: number }[] = [] // For fallback: had valid ID (YAML) but needs inline
 
     constructor(file_contents: string, path: string, url: string, data: FileData, file_cache: CachedMetadata) {
@@ -408,12 +414,16 @@ export class AllFile extends AbstractFile {
         this.id_indexes = []
         this.inline_id_indexes = []
         this.regex_id_indexes = []
+        this.matched_note_spans = []
         this.notes_to_edit = []
         this.notes_to_delete = []
     }
 
     scanNotes() {
         for (let note_match of this.file.matchAll(this.data.NOTE_REGEXP)) {
+            // Record the full source span of this matched note so the safety
+            // net can distinguish a real card from an orphaned card-cue line.
+            this.matched_note_spans.push([note_match.index, note_match.index + note_match[0].length])
             let [note, position]: [string, number] = [note_match[1], note_match.index + note_match[0].indexOf(note_match[1]) + note_match[1].length]
             // That second thing essentially gets the index of the end of the first capture group.
             let note_obj = new Note(
@@ -475,6 +485,7 @@ export class AllFile extends AbstractFile {
 
     scanInlineNotes() {
         for (let note_match of this.file.matchAll(this.data.INLINE_REGEXP)) {
+            this.matched_note_spans.push([note_match.index, note_match.index + note_match[0].length])
             let [note, position]: [string, number] = [note_match[1], note_match.index + note_match[0].indexOf(note_match[1]) + note_match[1].length]
             // That second thing essentially gets the index of the end of the first capture group.
             let note_obj = new InlineNote(
@@ -536,6 +547,7 @@ export class AllFile extends AbstractFile {
                 let regexp: RegExp = new RegExp(regexp_str + tag_str + id_str, 'gm')
                 for (let match of findignore(regexp, this.file, this.ignore_spans)) {
                     this.ignore_spans.push([match.index, match.index + match[0].length])
+                    this.matched_note_spans.push([match.index, match.index + match[0].length])
                     let note_obj = new RegexNote(
                         match, note_type, this.data.fields_dict,
                         search_tags, search_id, this.data.curly_cloze, this.data.highlights_to_cloze, this.formatter, this.data.cloze_keyword
@@ -555,6 +567,7 @@ export class AllFile extends AbstractFile {
                             if (parsed.identifier == CLOZE_ERROR) {
                                 // This means it wasn't actually a note! So we should remove it from ignore_spans
                                 this.ignore_spans.pop()
+                                this.matched_note_spans.pop()
                                 continue
                             }
                             console.warn("Note with id", parsed.identifier, " in file ", this.path, " does not exist in Anki!")
@@ -565,6 +578,7 @@ export class AllFile extends AbstractFile {
                         if (parsed.identifier == CLOZE_ERROR) {
                             // This means it wasn't actually a note! So we should remove it from ignore_spans
                             this.ignore_spans.pop()
+                            this.matched_note_spans.pop()
                             continue
                         }
                         parsed.note.tags.push(...this.global_tags.split(TAG_SEP))
@@ -665,27 +679,26 @@ export class AllFile extends AbstractFile {
     }
 
     /**
-     * Heuristic post-scan check: scan the file for lines that strongly resemble
-     * card delimiters (e.g. `^Q:`, `^A:`, `^START`, `^STARTI`) and verify each
-     * one is either part of a matched note OR explained by an ignore span we
-     * trust (deck line / tag line / frozen / explicit Begin Note / Inline). If
-     * a card-like line is swallowed only by a math or code ignore span, it's
-     * almost certainly a false positive from a stray `$` or backtick. Surface
-     * the first few in `scan_diagnostics` so the user sees the warning instead
-     * of silently losing cards. This is the safety net for the regression that
-     * led to this fork.
+     * Post-scan safety net: scan the file for lines that strongly resemble the
+     * START of a card (e.g. `^Q:`, `^START`, or the literal cue harvested from
+     * the user's custom regexps) and verify each one actually produced a note.
+     *
+     * A card-cue line that did NOT produce a matched note is reported in
+     * `scan_diagnostics.suspected_unmatched` so the user sees a warning instead
+     * of silently losing the card. Two distinct causes are classified:
+     *   1. The cue sits inside a math/code ignore-span (the stray-`$` currency
+     *      regression that originally led to this fork).
+     *   2. The cue produced no note for any other reason, the most common being
+     *      a malformed card, e.g. the answer line is missing its `A:` prefix so
+     *      the Q/A regex never matched. This second case is what 5.2.0 missed.
+     *
+     * Matched ranges come from `matched_note_spans` (the exact source span of
+     * every note the scanner queued), not the old id_indexes +/-400 heuristic,
+     * so an orphaned cue sitting right next to a real card is no longer masked.
      */
     detectSuspectedUnmatchedCards() {
-        // Build a set of "matched note" ranges from the cards we actually
-        // queued for add/edit. Anything overlapping these is fine.
-        const matched_ranges: [number, number][] = []
-        for (const span of this.existingIDSpans) {
-            matched_ranges.push([Math.max(0, span[0] - 400), span[1] + 400])
-        }
-        for (const idx of this.id_indexes) matched_ranges.push([Math.max(0, idx - 400), idx + 400])
-        for (const idx of this.inline_id_indexes) matched_ranges.push([Math.max(0, idx - 400), idx + 400])
-        for (const idx of this.regex_id_indexes) matched_ranges.push([Math.max(0, idx - 400), idx + 400])
-
+        // Exact source spans of every note the scanner actually matched.
+        const matched_ranges: [number, number][] = this.matched_note_spans
         const inMatched = (pos: number) => matched_ranges.some(([a, b]) => pos >= a && pos < b)
 
         // Pull custom regex first-line cues from settings so we can detect them
@@ -706,9 +719,11 @@ export class AllFile extends AbstractFile {
             cueRegexes.push(new RegExp("^" + this.data.NOTE_REGEXP.source.split("\\n")[0].replace(/^\^/, ""), "gm"))
         } catch (_) {}
 
-        // Compute the set of ignore spans that came from math/code only.
-        // We rebuild them here so we can distinguish "swallowed by stray dollar"
-        // from "legitimately part of an explicit Begin Note block".
+        // If we couldn't derive any cue, there's nothing reliable to check.
+        if (cueRegexes.length === 0) return
+
+        // Compute the math/code ignore spans so we can label WHY a cue was
+        // dropped (stray-dollar swallow vs malformed card).
         const math_code_spans: [number, number][] = []
         for (const m of this.file.matchAll(c.OBS_INLINE_MATH_REGEXP)) {
             math_code_spans.push([m.index, m.index + m[0].length])
@@ -724,21 +739,39 @@ export class AllFile extends AbstractFile {
         }
         const inMathCode = (pos: number) => math_code_spans.find(([a, b]) => pos >= a && pos < b)
 
+        // Spans we trust as legitimate non-card content so a cue inside them
+        // isn't reported (deck line, tag line, frozen-fields, explicit blocks).
+        const trusted_spans = this.ignore_spans.filter(
+            ([a, b]) => !inMatched(a) && !matched_ranges.some(([ma, mb]) => a >= ma && a < mb)
+        )
+        const inTrusted = (pos: number) => trusted_spans.some(([a, b]) => pos >= a && pos < b)
+
         const seenLines = new Set<number>()
         for (const cue of cueRegexes) {
             for (const m of this.file.matchAll(cue)) {
                 if (seenLines.has(m.index)) continue
                 seenLines.add(m.index)
+                // A cue that produced a real note is fine.
                 if (inMatched(m.index)) continue
+
                 const swallowingSpan = inMathCode(m.index)
-                if (!swallowingSpan) continue
+                let reason: string
+                if (swallowingSpan) {
+                    reason = `swallowed by math/code ignore-span [${swallowingSpan[0]}..${swallowingSpan[1]}], len=${swallowingSpan[1] - swallowingSpan[0]} (likely a stray "$" / backtick)`
+                } else if (inTrusted(m.index)) {
+                    // Inside a deck/tag/frozen/explicit block we trust. Not a drop.
+                    continue
+                } else {
+                    reason = `card start did not match the note pattern, no note was created. Most often the answer line is missing its "A:" prefix (or another required field), so the Q/A regex never matched. This card was NOT synced.`
+                }
+
                 const lineNumber = this.file.slice(0, m.index).split("\n").length
                 const lineEnd = this.file.indexOf("\n", m.index)
                 const preview = this.file.slice(m.index, lineEnd === -1 ? m.index + 120 : lineEnd).slice(0, 120)
                 this.scan_diagnostics.suspected_unmatched.push({
                     line: lineNumber,
                     preview,
-                    reason: `swallowed by math/code ignore-span [${swallowingSpan[0]}..${swallowingSpan[1]}], len=${swallowingSpan[1]-swallowingSpan[0]}`,
+                    reason,
                 })
                 if (this.scan_diagnostics.suspected_unmatched.length >= 25) return
             }
