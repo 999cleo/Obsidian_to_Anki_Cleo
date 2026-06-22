@@ -108,16 +108,24 @@ export class FormatConverter {
 		}
 		for (let embed of this.file_cache.embeds) {
 			if (note_text.includes(embed.original)) {
-				this.detectedMedia.add(embed.link)
-				if (AUDIO_EXTS.includes(extname(embed.link))) {
-					note_text = note_text.replace(new RegExp(c.escapeRegex(embed.original), "g"), "[sound:" + basename(embed.link) + "]")
-				} else if (IMAGE_EXTS.includes(extname(embed.link))) {
+				// Decode percent-encoding (e.g. "%20" -> " ") so the name we
+				// register for upload, the name Anki stores the file under, and
+				// the name we put in <img src>/[sound:] all agree on the literal
+				// on-disk filename. Without this, markdown-style embeds like
+				// ![](Pasted%20image%201.png) store under "...%20..." but Anki
+				// resolves the src with the "%20" decoded, so the lookup misses
+				// and the image renders broken. See c.decodeMediaLink.
+				const decodedLink = c.decodeMediaLink(embed.link)
+				this.detectedMedia.add(decodedLink)
+				if (AUDIO_EXTS.includes(extname(decodedLink))) {
+					note_text = note_text.replace(new RegExp(c.escapeRegex(embed.original), "g"), "[sound:" + basename(decodedLink) + "]")
+				} else if (IMAGE_EXTS.includes(extname(decodedLink))) {
 					note_text = note_text.replace(
 						new RegExp(c.escapeRegex(embed.original), "g"),
-						'<img src="' + basename(embed.link) + '" alt="' + embed.displayText + '">'
+						'<img src="' + basename(decodedLink) + '" alt="' + embed.displayText + '">'
 					)
 				} else {
-					console.warn("Unsupported extension: ", extname(embed.link))
+					console.warn("Unsupported extension: ", extname(decodedLink))
 				}
 			}
 		}

@@ -458,6 +458,9 @@ export default class MyPlugin extends Plugin {
 				if (diagnostics.add_failure_count > 0) {
 					lines.push(`❌ ${diagnostics.add_failure_count} note(s) were rejected by Anki (duplicates / empty fields / unknown model). Check console for the rejected fronts.`)
 				}
+				if (diagnostics.media_failure_count > 0) {
+					lines.push(`🖼️ ${diagnostics.media_failure_count} media file(s) could not be located and will be broken in Anki. Check console for the filenames.`)
+				}
 				console.warn("[Obsidian_to_Anki_Kai] Sync diagnostics:", diagnostics)
 				new Notice(`Synced ${changedFilesCount} file(s) with warnings. ${lines.join(" ")}`, 15000)
 			} else {

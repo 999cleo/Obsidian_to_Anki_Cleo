@@ -6,6 +6,28 @@ This fork exists to fix a class of **silent data loss** in the sync pipeline.
 
 ---
 
+## 5.4.0 - Fix broken images from percent-encoded embed links
+
+Images embedded with Obsidian's markdown-style syntax silently rendered as **broken images** in Anki, even though they displayed fine in Obsidian.
+
+Root cause: Obsidian writes two embed shapes depending on the "Use [[Wikilinks]]" setting and how a file was inserted:
+
+- Wikilink: `![[Pasted image 1.png]]` -> link is `Pasted image 1.png` (literal spaces)
+- Markdown: `![](Pasted%20image%201.png)` -> link is `Pasted%20image%201.png` (percent-encoded spaces)
+
+The plugin stored the media file in Anki's collection under the raw link name (`Pasted%20image%201.png`, with a literal `%20`) and wrote the same raw name into `<img src>`. When Anki's media server resolves an `<img src>`, it decodes `%20` back to a space and looks for `Pasted image 1.png`, which does not exist under that name, so the image renders broken. Wikilink embeds happened to work, which is why only some images broke.
+
+What changed:
+
+- New `decodeMediaLink` helper (`src/constants.ts`) normalises an embed target to its literal on-disk filename via `decodeURIComponent`, with a try/catch fallback so a real `%` in a filename never breaks the sync. Decoding a string with no escapes is a no-op, so wikilink embeds are unaffected.
+- `getAndFormatMedias` (`src/format.ts`) now decodes the link before registering it for upload, before building `[sound:...]`, and before building `<img src>`, so the stored name, the referenced name, and Anki's resolved name all agree.
+- New media-failure diagnostic: when an embed target cannot be located in the vault, it is recorded in `scan_diagnostics.media_failures` and surfaced in the post-sync warning Notice (`N media file(s) could not be located...`) with filenames in the DevTools console, instead of silently producing a broken card.
+- New zero-dep regression test `tests/regex/media-link-decode.test.js` locks the behaviour: wikilink embeds still work, percent-encoded embeds are repaired, subfolders and unicode filenames decode correctly, and malformed escapes fall back without throwing.
+
+Note on existing broken cards: re-syncing repairs them only if the note's file is re-scanned. If you have **smart scan** enabled and the `.md` file has not changed since the partial sync, force a rescan (edit and save the file, or disable smart scan for one sync) so the corrected `<img src>` and media upload are re-sent.
+
+---
+
 ## 5.3.0 - Catch malformed cards that never matched (missing `A:` and friends)
 
 5.2.0's safety net only flagged a card-cue line when it fell **inside a math/code ignore-span** (the stray-`$` currency bug). But a card can silently vanish for a second reason that the net walked straight past:

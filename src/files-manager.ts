@@ -212,6 +212,12 @@ export class FileManager {
                 const dataFile = this.app.metadataCache.getFirstLinkpathDest(mediaLink, file.path)
                 if (!(dataFile)) {
                     console.warn("Couldn't locate media file ", mediaLink)
+                    // Surface so the user sees a warning instead of a silently
+                    // broken <img>/[sound:] on the synced card.
+                    file.scan_diagnostics.media_failures.push({
+                        name: mediaLink,
+                        reason: "could not be located in the vault (the embed target did not resolve to a file). The card was synced but the image/audio will be broken in Anki.",
+                    })
                 }
                 else {
                     // Located successfully, so treat as if we've added the media
@@ -337,27 +343,33 @@ export class FileManager {
     getDiagnosticsSummary(): null | {
         unmatched_count: number,
         add_failure_count: number,
+        media_failure_count: number,
         unmatched_samples: string[],
         add_failure_samples: string[],
-        per_file: { path: string, unmatched: number, add_failures: number }[],
+        media_failure_samples: string[],
+        per_file: { path: string, unmatched: number, add_failures: number, media_failures: number }[],
     } {
         let unmatched = 0
         let addFails = 0
+        let mediaFails = 0
         const unmatched_samples: string[] = []
         const add_failure_samples: string[] = []
-        const per_file: { path: string, unmatched: number, add_failures: number }[] = []
+        const media_failure_samples: string[] = []
+        const per_file: { path: string, unmatched: number, add_failures: number, media_failures: number }[] = []
         for (const file of this.ownFiles) {
             const d = file.scan_diagnostics
             if (!d) continue
-            if (d.suspected_unmatched.length || d.add_failures.length) {
+            if (d.suspected_unmatched.length || d.add_failures.length || d.media_failures.length) {
                 per_file.push({
                     path: file.path,
                     unmatched: d.suspected_unmatched.length,
                     add_failures: d.add_failures.length,
+                    media_failures: d.media_failures.length,
                 })
             }
             unmatched += d.suspected_unmatched.length
             addFails += d.add_failures.length
+            mediaFails += d.media_failures.length
             for (const u of d.suspected_unmatched) {
                 if (unmatched_samples.length < 6) {
                     unmatched_samples.push(`${file.path}:${u.line} ${u.preview}`)
@@ -368,13 +380,20 @@ export class FileManager {
                     add_failure_samples.push(`${f.preview} (${f.error})`)
                 }
             }
+            for (const m of d.media_failures) {
+                if (media_failure_samples.length < 6) {
+                    media_failure_samples.push(`${file.path}: ${m.name} - ${m.reason}`)
+                }
+            }
         }
-        if (unmatched === 0 && addFails === 0) return null
+        if (unmatched === 0 && addFails === 0 && mediaFails === 0) return null
         return {
             unmatched_count: unmatched,
             add_failure_count: addFails,
+            media_failure_count: mediaFails,
             unmatched_samples,
             add_failure_samples,
+            media_failure_samples,
             per_file,
         }
     }

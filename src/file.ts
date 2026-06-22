@@ -100,7 +100,8 @@ abstract class AbstractFile {
     scan_diagnostics: {
         suspected_unmatched: { line: number, preview: string, reason: string }[],
         add_failures: { preview: string, error: string }[],
-    } = { suspected_unmatched: [], add_failures: [] }
+        media_failures: { name: string, reason: string }[],
+    } = { suspected_unmatched: [], add_failures: [], media_failures: [] }
 
     formatter: FormatConverter
 

@@ -39,3 +39,26 @@ export function escapeRegex(str: string): string {
     // Got from stackoverflow - https://stackoverflow.com/questions/3561493/is-there-a-regexp-escape-function-in-javascript
     return str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 }
+
+// Normalise an Obsidian embed/link target to the literal on-disk filename.
+//
+// Obsidian writes two embed shapes depending on the "Use [[Wikilinks]]" setting
+// and how the file was inserted:
+//   - Wikilink:  ![[Pasted image 1.png]]   -> link = "Pasted image 1.png" (literal spaces)
+//   - Markdown:  ![](Pasted%20image%201.png) -> link = "Pasted%20image%201.png" (percent-encoded)
+//
+// If the percent-encoded form is passed through untouched, the file gets stored
+// in Anki's media collection under a name containing a literal "%20" while the
+// <img src> Anki later resolves gets its "%20" decoded back to a space, so the
+// lookup misses and the image renders broken. Decoding here makes locate /
+// store / reference all agree on the same literal filename. Decoding a string
+// with no percent-escapes is a no-op, so wikilink embeds are unaffected. A
+// malformed escape (e.g. a real "%" in the filename) throws, in which case we
+// fall back to the original string rather than break the sync.
+export function decodeMediaLink(link: string): string {
+    try {
+        return decodeURIComponent(link)
+    } catch (_) {
+        return link
+    }
+}
