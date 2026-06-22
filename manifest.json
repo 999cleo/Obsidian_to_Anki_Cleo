@@ -1,7 +1,7 @@
 {
   "id": "obsidian-to-anki-plugin",
   "name": "Obsidian_to_Anki_Cleo",
-  "version": "5.4.0",
+  "version": "5.5.0",
   "minAppVersion": "0.9.20",
   "description": "Hardened Obsidian-to-Anki sync. Fork of n4tt0u's Kai with the silent-card-drop bug fixed, settings migrations applied on every load, AnkiConnect per-note failures surfaced, and post-sync diagnostics.",
   "author": "999cleo (forked from n4tt0u; original by Pseudonium)",

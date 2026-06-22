@@ -6,6 +6,28 @@ This fork exists to fix a class of **silent data loss** in the sync pipeline.
 
 ---
 
+## 5.5.0 - Fix broken images from Anki's filename case normalisation
+
+Images embedded with capitalised filenames (e.g. `Pasted image 1.png`, Obsidian's default) silently rendered as **broken images** in Anki on Linux/macOS, even though the file was uploaded and present in Anki's media folder.
+
+Root cause: recent Anki **lowercases** media filenames when it stores them. Storing `Pasted image 1.png` actually lands the file as `pasted image 1.png`. The plugin wrote the card reference as `<img src="Pasted image 1.png">` (original case). On a case-sensitive filesystem `Pasted` does not equal `pasted`, so the reference fails to resolve and the image breaks. Older Anki preserved case, which is why images embedded long ago still work while recently-synced ones break, with nothing changed on the user's side except an Anki update.
+
+This was verified directly against AnkiConnect: `storeMediaFile("Pasted image 1.png", ...)` returns `"pasted image 1.png"`, and `storeMediaFile("CAPS_test.png", ...)` returns `"caps_test.png"`.
+
+What changed:
+
+- New `ankiMediaName(link)` helper (`src/constants.ts`) = `basename(decodeMediaLink(link)).toLowerCase()`. It produces the exact name Anki will store the file under: directory stripped, percent-encoding decoded, lowercased.
+- The plugin now uses this single name on BOTH sides: it stores the media under `ankiMediaName(...)` (`src/files-manager.ts`) and writes the same `ankiMediaName(...)` into `<img src>` / `[sound:]` (`src/format.ts`). Because the plugin controls both, they always agree, and an already-lowercase name is a no-op for Anki's own normalisation, so it works whether or not the running Anki version lowercases.
+- The file is still LOCATED on disk via the original-case decoded link (the vault is case-sensitive), so lookup of the real file is unaffected.
+- Media extension classification is now case-insensitive, so uppercase extensions like `.PNG` / `.MP3` are recognised instead of being skipped as "unsupported".
+- New zero-dep regression test `tests/regex/media-link-case.test.js`.
+
+### Fixing your existing broken cards
+
+Existing cards still reference the original-case name. Either re-sync the affected notes after updating (force a rescan if smart scan is on: edit and save the note, or disable smart scan for one sync), or run a one-off fix that rewrites card references to lowercase where the lowercase file already exists in `collection.media`. After 5.5.0 all new syncs are consistent.
+
+---
+
 ## 5.4.0 - Fix broken images from percent-encoded embed links
 
 Images embedded with Obsidian's markdown-style syntax silently rendered as **broken images** in Anki, even though they displayed fine in Obsidian.

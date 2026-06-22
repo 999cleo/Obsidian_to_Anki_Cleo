@@ -3,7 +3,7 @@ import { ParsedSettings, FileData } from './interfaces/settings-interface'
 import { App, TFile, TFolder, TAbstractFile, CachedMetadata, FileSystemAdapter, Notice } from 'obsidian'
 import { AllFile } from './file'
 import * as AnkiConnect from './anki'
-import { basename } from 'path'
+import * as c from './constants'
 import multimatch from "multimatch"
 interface addNoteResponse {
     result: number,
@@ -223,9 +223,13 @@ export class FileManager {
                     // Located successfully, so treat as if we've added the media
                     this.added_media_set.add(mediaLink)
                     const realPath = (this.app.vault.adapter as FileSystemAdapter).getFullPath(dataFile.path)
+                    // Store under the lowercased name Anki normalises to (see
+                    // c.ankiMediaName), so it matches the <img src>/[sound:]
+                    // reference written by getAndFormatMedias. realPath still
+                    // points at the real, original-case file on disk.
                     temp.push(
                         AnkiConnect.storeMediaFileByPath(
-                            basename(mediaLink),
+                            c.ankiMediaName(mediaLink),
                             realPath
                         )
                     )

@@ -1,5 +1,5 @@
 import { AnkiConnectNote } from './interfaces/note-interface'
-import { basename, extname } from 'path'
+import { extname } from 'path'
 import { Converter } from 'showdown'
 import { CachedMetadata } from 'obsidian'
 import * as c from './constants'
@@ -108,24 +108,34 @@ export class FormatConverter {
 		}
 		for (let embed of this.file_cache.embeds) {
 			if (note_text.includes(embed.original)) {
-				// Decode percent-encoding (e.g. "%20" -> " ") so the name we
-				// register for upload, the name Anki stores the file under, and
-				// the name we put in <img src>/[sound:] all agree on the literal
-				// on-disk filename. Without this, markdown-style embeds like
-				// ![](Pasted%20image%201.png) store under "...%20..." but Anki
-				// resolves the src with the "%20" decoded, so the lookup misses
-				// and the image renders broken. See c.decodeMediaLink.
+				// Two distinct names are needed:
+				//  - decodedLink (original case): used to LOCATE the file on
+				//    disk in the vault, which is case-sensitive on Linux/macOS.
+				//    Registered in detectedMedia; files-manager resolves it via
+				//    getFirstLinkpathDest, so it must match the real filename.
+				//  - ankiName (decoded + lowercased): the name Anki actually
+				//    stores the file under (recent Anki lowercases media names)
+				//    and therefore the name we must put in <img src>/[sound:].
+				// Decoding handles percent-encoded markdown embeds; lowercasing
+				// handles Anki's case normalisation. Doing both on each side
+				// makes locate / store / reference all agree. See
+				// c.decodeMediaLink and c.ankiMediaName.
 				const decodedLink = c.decodeMediaLink(embed.link)
+				const ankiName = c.ankiMediaName(embed.link)
+				// Classify by lowercased extension so uppercase extensions
+				// (e.g. ".PNG", ".MP3") are still recognised; the EXTS lists
+				// are lowercase.
+				const ext = extname(decodedLink).toLowerCase()
 				this.detectedMedia.add(decodedLink)
-				if (AUDIO_EXTS.includes(extname(decodedLink))) {
-					note_text = note_text.replace(new RegExp(c.escapeRegex(embed.original), "g"), "[sound:" + basename(decodedLink) + "]")
-				} else if (IMAGE_EXTS.includes(extname(decodedLink))) {
+				if (AUDIO_EXTS.includes(ext)) {
+					note_text = note_text.replace(new RegExp(c.escapeRegex(embed.original), "g"), "[sound:" + ankiName + "]")
+				} else if (IMAGE_EXTS.includes(ext)) {
 					note_text = note_text.replace(
 						new RegExp(c.escapeRegex(embed.original), "g"),
-						'<img src="' + basename(decodedLink) + '" alt="' + embed.displayText + '">'
+						'<img src="' + ankiName + '" alt="' + embed.displayText + '">'
 					)
 				} else {
-					console.warn("Unsupported extension: ", extname(decodedLink))
+					console.warn("Unsupported extension: ", ext)
 				}
 			}
 		}
